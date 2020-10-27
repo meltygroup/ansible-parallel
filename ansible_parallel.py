@@ -1,5 +1,6 @@
 import os
 import asyncio
+from typing import Tuple
 from time import perf_counter
 import subprocess
 
@@ -11,6 +12,38 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("playbook", nargs="+")
     return parser.parse_known_args()
+
+
+def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
+    """Parse a chunk of ansible-playbook output.
+
+    Given an ansible-playbook output chunk, like:
+
+    TASK [staging : Install sudo] ********************************************
+    ok: [staging1.eeple.net]
+
+    return a tree-tuple:
+    - Chunk type:
+       - "OK", "CHANGED", "FAILED", "UNREACHABLE": Ansible task status.
+       - "TASK": Unknown task type, yet probably a task.
+       - "RECAP": The big "PLAY RECAP" section at the end of a run.
+    - playbook name
+    - the actual chunk.
+
+    """
+    lines = chunk.split("\n")
+    if len(lines) >= 2:
+        if "PLAY RECAP" in chunk:
+            return ("RECAP", playbook, chunk)
+        if "ok:" in lines[1]:
+            return ("OK", playbook, chunk)
+        if "changed:" in lines[1]:
+            return ("CHANGED", playbook, chunk)
+        if "failed:" in lines[1]:
+            return ("FAILED", playbook, chunk)
+        if "unreachable:" in lines[1]:
+            return ("UNREACHABLE", playbook, chunk)
+    return ("TASK", playbook, chunk)
 
 
 async def run_playbook(playbook, args, results):
@@ -28,17 +61,13 @@ async def run_playbook(playbook, args, results):
     while line := (await process.stdout.readline()).decode():
         if line == "\n":
             chunk = "".join(task) + line
-            await results.put(
-                ("RECAP" if "PLAY RECAP" in chunk else "TASK", playbook, chunk)
-            )
+            await results.put(prepare_chunk(playbook, chunk))
             task = []
         else:
             task.append(line)
     if task:
         chunk = "".join(task)
-        await results.put(
-            ("RECAP" if "PLAY RECAP" in chunk else "TASK", playbook, chunk)
-        )
+        await results.put(prepare_chunk(playbook, chunk))
 
     await process.wait()
     await results.put(("DONE", playbook, ""))
@@ -75,10 +104,15 @@ async def show_progression(results):
                 ends[playbook] = perf_counter()
             if msgtype == "RECAP":
                 recaps[playbook] = msg
+            if msgtype in ("CHANGED", "FAILED", "UNREACHABLE"):
+                print(msg)
+            status_line = (
+                f"{len(currently_running)} playbook{'s' if len(currently_running) > 1 else ''} running: "
+                f"{truncate(', '.join(currently_running), max_width=100)}"
+            )
             print(
                 FRAMES[frameno % len(FRAMES)],
-                f"{len(currently_running)} playbook{'s' if len(currently_running) > 1 else ''} running:",
-                f"{truncate(', '.join(currently_running))}",
+                f"{status_line:126}",
                 end="\r",
             )
     finally:
