@@ -39,7 +39,7 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
             return ("OK", playbook, chunk)
         if "changed:" in lines[1]:
             return ("CHANGED", playbook, chunk)
-        if "failed:" in lines[1]:
+        if "failed:" in lines[1] or "fatal:" in lines[1]:
             return ("FAILED", playbook, chunk)
         if "unreachable:" in lines[1]:
             return ("UNREACHABLE", playbook, chunk)
