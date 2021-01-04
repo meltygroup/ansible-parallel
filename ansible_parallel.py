@@ -111,6 +111,8 @@ async def show_progression(results):
                 f"{truncate(', '.join(currently_running), max_width=100)}"
             )
             print(
+                "\033[0J",  # ED (Erase In Display) with parameter 0:
+                # Erase from the active position to the end of the screen.
                 FRAMES[frameno % len(FRAMES)],
                 f"{status_line:126}",
                 end="\r",
