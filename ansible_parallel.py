@@ -2,6 +2,7 @@ import os
 import asyncio
 from typing import Tuple
 from time import perf_counter
+from shutil import get_terminal_size
 import subprocess
 
 
@@ -82,10 +83,10 @@ DISABLE_CURSOR = "\033[?25l"
 ENABLE_CURSOR = "\033[?25h"
 
 
-def truncate(string, max_width=120):
-    if len(string) < max_width:
+def truncate(string, max_width):
+    if len(string) <= max_width:
         return string
-    return string[:max_width] + "…"
+    return string[: max_width - 1] + "…"
 
 
 async def show_progression(results):
@@ -95,6 +96,7 @@ async def show_progression(results):
     currently_running = []
     frameno = 0
     print(DISABLE_CURSOR, end="")
+    columns, _ = get_terminal_size()
     try:
         while True:
             result = await results.get()
@@ -113,14 +115,14 @@ async def show_progression(results):
             if msgtype in ("CHANGED", "FAILED", "UNREACHABLE"):
                 print(msg)
             status_line = (
+                FRAMES[frameno % len(FRAMES)] + " "
                 f"{len(currently_running)} playbook{'s' if len(currently_running) > 1 else ''} running: "
-                f"{truncate(', '.join(currently_running), max_width=100)}"
+                f"{', '.join(currently_running)}"
             )
             print(
                 "\033[0J",  # ED (Erase In Display) with parameter 0:
                 # Erase from the active position to the end of the screen.
-                FRAMES[frameno % len(FRAMES)],
-                f"{status_line:126}",
+                truncate(status_line, max_width=columns),
                 end="\r",
             )
     finally:
