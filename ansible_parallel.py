@@ -58,7 +58,10 @@ async def run_playbook(playbook, args, results):
         env={**os.environ, "ANSIBLE_FORCE_COLOR": "1"},
     )
     task = []
-    while line := (await process.stdout.readline()).decode():
+    while True:
+        line = (await process.stdout.readline()).decode()
+        if not line:
+            break
         if line == "\n":
             chunk = "".join(task) + line
             await results.put(prepare_chunk(playbook, chunk))
@@ -93,7 +96,10 @@ async def show_progression(results):
     frameno = 0
     print(DISABLE_CURSOR, end="")
     try:
-        while result := await results.get():
+        while True:
+            result = await results.get()
+            if not result:
+                break
             frameno += 1
             msgtype, playbook, msg = result
             if msgtype == "START":
