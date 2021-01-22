@@ -1,12 +1,11 @@
-import os
-import asyncio
-from typing import Tuple
-from time import perf_counter
-from shutil import get_terminal_size
-import subprocess
-
-
 import argparse
+import asyncio
+import os
+import subprocess
+import sys
+from shutil import get_terminal_size
+from time import perf_counter
+from typing import List, Tuple
 
 
 def parse_args():
@@ -25,9 +24,6 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
 
     return a tree-tuple:
     - Chunk type:
-       - "OK", "CHANGED", "FAILED", "UNREACHABLE": Ansible task status.
-       - "TASK": Unknown task type, yet probably a task.
-       - "RECAP": The big "PLAY RECAP" section at the end of a run.
     - playbook name
     - the actual chunk.
 
@@ -44,7 +40,9 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
             return ("FAILED", playbook, chunk)
         if "unreachable:" in lines[1]:
             return ("UNREACHABLE", playbook, chunk)
-    return ("TASK", playbook, chunk)
+    if chunk.startswith("TASK"):
+        return ("TASK", playbook, chunk)
+    return ("MSG", playbook, chunk)
 
 
 async def run_playbook(playbook, args, results):
@@ -89,13 +87,16 @@ def truncate(string, max_width):
     return string[: max_width - 1] + "…"
 
 
-async def show_progression(results):
+async def show_progression(results, playbooks: List[str], stream):
     recaps = {}
     starts = {}
     ends = {}
     currently_running = []
     frameno = 0
-    print(DISABLE_CURSOR, end="")
+    stream.write(DISABLE_CURSOR)
+    longest_name = max(len(playbook) for playbook in playbooks)
+    for playbook in playbooks:
+        stream.write(playbook + ": \n")
     columns, _ = get_terminal_size()
     try:
         while True:
@@ -104,47 +105,67 @@ async def show_progression(results):
                 break
             frameno += 1
             msgtype, playbook, msg = result
+            position = playbooks.index(playbook)
+            diff = len(playbooks) - position
+            stream.write(f"\033[{diff}A")
+            stream.write(
+                f"\033[{longest_name + 2}C"
+            )  # Move right after the playbook name and :.
             if msgtype == "START":
                 starts[playbook] = perf_counter()
                 currently_running.append(playbook)
+                stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
+                stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
+                stream.write("Started")
             if msgtype == "DONE":
                 currently_running.remove(playbook)
                 ends[playbook] = perf_counter()
+                stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
+                stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
+                stream.write("Done.")
             if msgtype == "RECAP":
                 recaps[playbook] = msg
-            if msgtype in ("CHANGED", "FAILED", "UNREACHABLE"):
-                print(msg)
-            status_line = (
-                FRAMES[frameno % len(FRAMES)] + " "
-                f"{len(currently_running)} playbook{'s' if len(currently_running) > 1 else ''} running: "
-                f"{', '.join(currently_running)}"
-            )
-            print(
-                "\033[0J",  # ED (Erase In Display) with parameter 0:
-                # Erase from the active position to the end of the screen.
-                truncate(status_line, max_width=columns - 1),
-                end="\r",
-            )
+            if msgtype == "TASK":
+                stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
+                stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
+                stream.write(
+                    truncate(msg.split("\n")[0], max_width=columns - longest_name - 4)
+                )
+            stream.write(f"\033[{diff}B")
+            stream.write(f"\033[{columns + 1}D")
+            stream.flush()
     finally:
-        print(ENABLE_CURSOR, end="")
+        stream.write(ENABLE_CURSOR)
+        stream.flush()
     for playbook, recap in recaps.items():
-        print(
-            f"# Playbook {playbook}, ran in {ends[playbook] - starts[playbook]:.0f}s",
-            end="\n\n",
+        stream.write(
+            f"# Playbook {playbook}, ran in {ends[playbook] - starts[playbook]:.0f}s\n"
         )
         for line in recap.split("\n"):
             if "PLAY RECAP" not in line:
-                print(line)
+                stream.write(line)
+                stream.write("\n")
+    stream.flush()
 
 
 async def amain():
     args, remaining_args = parse_args()
-    results = asyncio.Queue()
-    asyncio.create_task(show_progression(results))
-    await asyncio.gather(
-        *[run_playbook(playbook, remaining_args, results) for playbook in args.playbook]
+    results_queue = asyncio.Queue()
+    printer_task = asyncio.create_task(
+        show_progression(results_queue, args.playbook, sys.stderr)
     )
-    await results.put(None)
+    results = await asyncio.gather(
+        *[
+            run_playbook(playbook, remaining_args, results_queue)
+            for playbook in args.playbook
+        ],
+        return_exceptions=True,
+    )
+    await results_queue.put(None)
+    await printer_task
+    for result in results:
+        if result:
+            print(result)
 
 
 def main():

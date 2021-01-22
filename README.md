@@ -23,8 +23,24 @@ feel free to run `ansible-parallel --check *.yml` for example.
 
 ## Example
 
+It's easy to start:
+
 ```bash
 $ ansible-parallel *.yml
+```
+
+When it runs, it display a live update of what's going on, one line per playbook:
+
+```
+web.yml:     TASK [common : Configure Debian repositories] *****************************
+gitlab.yml:  TASK [common : Configure IP failover] *************************************
+staging.yml: TASK [common : Configure Debian repositories] *****************************
+dev.yml:     Done.
+```
+
+And when it's done, it prints a full report like:
+
+```
 # Playbook playbook-webs.yml, ran in 123s
 
 web1.meltygroup.com         : ok=51   changed=0    unreachable=0    failed=0    skipped=12   rescued=0    ignored=0
