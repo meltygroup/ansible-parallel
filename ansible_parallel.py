@@ -151,7 +151,7 @@ async def show_progression(results, playbooks: List[str], stream):
 async def amain():
     args, remaining_args = parse_args()
     results_queue = asyncio.Queue()
-    printer_task = asyncio.create_task(
+    printer_task = asyncio.ensure_future(
         show_progression(results_queue, args.playbook, sys.stderr)
     )
     results = await asyncio.gather(
@@ -169,7 +169,16 @@ async def amain():
 
 
 def main():
-    asyncio.run(amain())
+    if sys.version_info >= (3, 7):
+        asyncio.run(amain())
+    else:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(amain())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
 
 
 if __name__ == "__main__":
