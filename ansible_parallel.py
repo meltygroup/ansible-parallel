@@ -1,5 +1,11 @@
+"""Run multiple ansible playbooks in parallel.
+
+Give the list of playbooks first, all remaining arguments will be
+passed to ansible-playbook.
+"""
 import argparse
 import asyncio
+from collections import defaultdict
 import os
 import subprocess
 import sys
@@ -46,7 +52,7 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
 
 
 async def run_playbook(playbook, args, results):
-    await results.put(("START", playbook, ""))
+    await results.put(("START", playbook, args))
     process = await asyncio.create_subprocess_exec(
         "ansible-playbook",
         playbook,
@@ -72,7 +78,10 @@ async def run_playbook(playbook, args, results):
         await results.put(prepare_chunk(playbook, chunk))
 
     await process.wait()
-    await results.put(("DONE", playbook, ""))
+    if process.returncode != 0:
+        await results.put(("FAILURE", playbook, ""))
+    else:
+        await results.put(("DONE", playbook, ""))
 
 
 FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -91,6 +100,9 @@ async def show_progression(results, playbooks: List[str], stream):
     recaps = {}
     starts = {}
     ends = {}
+    msgs = defaultdict(list)
+    failures = {}
+    args = {}
     currently_running = []
     frameno = 0
     stream.write(DISABLE_CURSOR)
@@ -113,6 +125,7 @@ async def show_progression(results, playbooks: List[str], stream):
             )  # Move right after the playbook name and :.
             if msgtype == "START":
                 starts[playbook] = perf_counter()
+                args[playbook] = msg
                 currently_running.append(playbook)
                 stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
                 stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
@@ -123,8 +136,17 @@ async def show_progression(results, playbooks: List[str], stream):
                 stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
                 stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
                 stream.write("Done.")
+            if msgtype == "FAILURE":
+                currently_running.remove(playbook)
+                ends[playbook] = perf_counter()
+                stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
+                stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
+                stream.write("Failed.")
+                failures[playbook] = "\n".join(msgs[playbook])
             if msgtype == "RECAP":
                 recaps[playbook] = msg
+            if msgtype == "MSG":
+                msgs[playbook].append(msg)
             if msgtype == "TASK":
                 stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
                 stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
@@ -145,6 +167,14 @@ async def show_progression(results, playbooks: List[str], stream):
             if "PLAY RECAP" not in line:
                 stream.write(line)
                 stream.write("\n")
+    for playbook, failure in failures.items():
+        stream.write(
+            f"\n# Failed 'ansible-playbook {playbook} {' '.join(args[playbook])}' "
+            f"in {ends[playbook] - starts[playbook]:.0f}s\n\n"
+        )
+        stream.write(failure)
+        stream.write("\n")
+
     stream.flush()
 
 
