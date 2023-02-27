@@ -28,7 +28,7 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
     - the actual chunk.
 
     """
-    lines = chunk.split("\n")
+    lines = chunk.strip().split("\n")
     if len(lines) >= 2:
         if "PLAY RECAP" in chunk:
             return ("RECAP", playbook, chunk)
@@ -42,10 +42,12 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
             return ("UNREACHABLE", playbook, chunk)
     if chunk.startswith("TASK"):
         return ("TASK", playbook, chunk)
+    if "ERROR!" in chunk:
+        return ("ERROR", playbook, chunk)
     return ("MSG", playbook, chunk)
 
 
-async def run_playbook(playbook, args, results):
+async def run_playbook(playbook, args, results: asyncio.Queue):
     await results.put(("START", playbook, ""))
     process = await asyncio.create_subprocess_exec(
         "ansible-playbook",
@@ -72,7 +74,13 @@ async def run_playbook(playbook, args, results):
         await results.put(prepare_chunk(playbook, chunk))
 
     await process.wait()
-    await results.put(("DONE", playbook, ""))
+    if process.returncode:
+        await results.put(
+            ("DONE", playbook, f"Exited with error code: {process.returncode}")
+        )
+    else:
+        await results.put(("DONE", playbook, "Done."))
+    return process.returncode
 
 
 FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -87,7 +95,7 @@ def truncate(string, max_width):
     return string[: max_width - 1] + "…"
 
 
-async def show_progression(results, playbooks: List[str], stream):
+async def show_progression(results: asyncio.Queue, playbooks: List[str], stream):
     recaps = {}
     starts = {}
     ends = {}
@@ -122,7 +130,7 @@ async def show_progression(results, playbooks: List[str], stream):
                 ends[playbook] = perf_counter()
                 stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
                 stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
-                stream.write("Done.")
+                stream.write(msg)
             if msgtype == "RECAP":
                 recaps[playbook] = msg
             if msgtype == "TASK":
@@ -130,6 +138,13 @@ async def show_progression(results, playbooks: List[str], stream):
                 stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
                 stream.write(
                     truncate(msg.split("\n")[0], max_width=columns - longest_name - 4)
+                )
+            if (
+                msgtype == "ERROR"
+            ):  # Collect lines that start with "ERROR" for the recap
+                recaps[playbook] = (
+                    "\n".join([line for line in msg.split("\n") if "ERROR" in line])
+                    + "\n"
                 )
             stream.write(f"\033[{diff}B")
             stream.write(f"\033[{columns + 1}D")
@@ -150,6 +165,12 @@ async def show_progression(results, playbooks: List[str], stream):
 
 async def amain():
     args, remaining_args = parse_args()
+    # Verify all playbook files can be found
+    for playbook in args.playbook:
+        if not os.path.isfile(playbook):
+            print("Could not find playbook:", playbook)
+            return 1
+
     results_queue = asyncio.Queue()
     printer_task = asyncio.create_task(
         show_progression(results_queue, args.playbook, sys.stderr)
@@ -163,14 +184,12 @@ async def amain():
     )
     await results_queue.put(None)
     await printer_task
-    for result in results:
-        if result:
-            print(result)
+    return sum(results)
 
 
 def main():
-    asyncio.run(amain())
+    return asyncio.run(amain())
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
