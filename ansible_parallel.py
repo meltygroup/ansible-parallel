@@ -37,8 +37,6 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
         if "changed:" in lines[1]:
             return ("CHANGED", playbook, chunk)
         if "failed:" in lines[1] or "fatal:" in lines[1]:
-            global did_fail
-            did_fail = True
             return ("FAILED", playbook, chunk)
         if "unreachable:" in lines[1]:
             return ("UNREACHABLE", playbook, chunk)
@@ -47,10 +45,10 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
     return ("MSG", playbook, chunk)
 
 
-async def run_playbook(playbook, args, results: asyncio.Queue):
+async def run_playbook(playbook , args, results: asyncio.Queue):
+    global did_fail
     await results.put(("START", playbook, ""))
     if not os.path.isfile(playbook):
-        global did_fail
         did_fail = True
         await results.put(("NOT_FOUND", playbook, ""))
     else:
@@ -79,6 +77,8 @@ async def run_playbook(playbook, args, results: asyncio.Queue):
             await results.put(prepare_chunk(playbook, chunk))
 
         await process.wait()
+        if process.returncode != 0:
+            did_fail = True
         await results.put(("DONE", playbook, ""))
 
 
