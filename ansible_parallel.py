@@ -37,6 +37,8 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
         if "changed:" in lines[1]:
             return ("CHANGED", playbook, chunk)
         if "failed:" in lines[1] or "fatal:" in lines[1]:
+            global did_fail
+            did_fail = True
             return ("FAILED", playbook, chunk)
         if "unreachable:" in lines[1]:
             return ("UNREACHABLE", playbook, chunk)
@@ -45,34 +47,39 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
     return ("MSG", playbook, chunk)
 
 
-async def run_playbook(playbook, args, results):
+async def run_playbook(playbook, args, results: asyncio.Queue):
     await results.put(("START", playbook, ""))
-    process = await asyncio.create_subprocess_exec(
-        "ansible-playbook",
-        playbook,
-        *args,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env={**os.environ, "ANSIBLE_FORCE_COLOR": "1"},
-    )
-    task = []
-    while True:
-        line = (await process.stdout.readline()).decode()
-        if not line:
-            break
-        if line == "\n":
-            chunk = "".join(task) + line
+    if not os.path.isfile(playbook):
+        global did_fail
+        did_fail = True
+        await results.put(("NOT_FOUND", playbook, ""))
+    else:
+        process = await asyncio.create_subprocess_exec(
+            "ansible-playbook",
+            playbook,
+            *args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "ANSIBLE_FORCE_COLOR": "1"},
+        )
+        task = []
+        while True:
+            line = (await process.stdout.readline()).decode()
+            if not line:
+                break
+            if line == "\n":
+                chunk = "".join(task) + line
+                await results.put(prepare_chunk(playbook, chunk))
+                task = []
+            else:
+                task.append(line)
+        if task:
+            chunk = "".join(task)
             await results.put(prepare_chunk(playbook, chunk))
-            task = []
-        else:
-            task.append(line)
-    if task:
-        chunk = "".join(task)
-        await results.put(prepare_chunk(playbook, chunk))
 
-    await process.wait()
-    await results.put(("DONE", playbook, ""))
+        await process.wait()
+        await results.put(("DONE", playbook, ""))
 
 
 FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -80,6 +87,7 @@ FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 DISABLE_CURSOR = "\033[?25l"
 ENABLE_CURSOR = "\033[?25h"
 
+did_fail = False
 
 def truncate(string, max_width):
     if len(string) <= max_width:
@@ -87,7 +95,7 @@ def truncate(string, max_width):
     return string[: max_width - 1] + "…"
 
 
-async def show_progression(results, playbooks: List[str], stream):
+async def show_progression(results: asyncio.Queue, playbooks: List[str], stream):
     recaps = {}
     starts = {}
     ends = {}
@@ -131,6 +139,9 @@ async def show_progression(results, playbooks: List[str], stream):
                 stream.write(
                     truncate(msg.split("\n")[0], max_width=columns - longest_name - 4)
                 )
+            if msgtype == "NOT_FOUND":
+                stream.write("Playbook not found!")
+                recaps[playbook] = None
             stream.write(f"\033[{diff}B")
             stream.write(f"\033[{columns + 1}D")
             stream.flush()
@@ -138,13 +149,18 @@ async def show_progression(results, playbooks: List[str], stream):
         stream.write(ENABLE_CURSOR)
         stream.flush()
     for playbook, recap in recaps.items():
-        stream.write(
-            f"# Playbook {playbook}, ran in {ends[playbook] - starts[playbook]:.0f}s\n"
-        )
-        for line in recap.split("\n"):
-            if "PLAY RECAP" not in line:
-                stream.write(line)
-                stream.write("\n")
+        if recap is None:
+            stream.write(
+                f"# Playbook {playbook} could not be found!\n\n"
+            )
+        else:
+            stream.write(
+                f"# Playbook {playbook}, ran in {ends[playbook] - starts[playbook]:.0f}s\n"
+            )
+            for line in recap.split("\n"):
+                if "PLAY RECAP" not in line:
+                    stream.write(line)
+                    stream.write("\n")
     stream.flush()
 
 
@@ -166,10 +182,11 @@ async def amain():
     for result in results:
         if result:
             print(result)
+    return int(did_fail)
 
 
 def main():
-    asyncio.run(amain())
+    return asyncio.run(amain())
 
 
 if __name__ == "__main__":
