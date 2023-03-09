@@ -48,7 +48,6 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
 
 
 async def run_playbook(playbook , args, results: asyncio.Queue):
-    global did_fail
     await results.put(("START", playbook, ""))
     process = await asyncio.create_subprocess_exec(
         "ansible-playbook",
@@ -75,9 +74,8 @@ async def run_playbook(playbook , args, results: asyncio.Queue):
         await results.put(prepare_chunk(playbook, chunk))
 
     await process.wait()
-    if process.returncode != 0:
-        did_fail = True
     await results.put(("DONE", playbook, ""))
+    return process.returncode
 
 
 FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -85,7 +83,6 @@ FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 DISABLE_CURSOR = "\033[?25l"
 ENABLE_CURSOR = "\033[?25h"
 
-did_fail = False
 
 def truncate(string, max_width):
     if len(string) <= max_width:
@@ -157,15 +154,12 @@ async def show_progression(results: asyncio.Queue, playbooks: List[str], stream)
 
 
 async def amain():
-    global did_fail
     args, remaining_args = parse_args()
     # Verify all playbook files can be found
     for playbook in args.playbook:
         if not os.path.isfile(playbook):
-            did_fail = True
             print("Could not find playbook:", playbook)
-    if did_fail:
-        return int(did_fail)
+            return 1
 
     results_queue = asyncio.Queue()
     printer_task = asyncio.create_task(
@@ -180,10 +174,7 @@ async def amain():
     )
     await results_queue.put(None)
     await printer_task
-    for result in results:
-        if result:
-            print(result)
-    return int(did_fail)
+    return sum(results)
 
 
 def main():
@@ -191,4 +182,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
