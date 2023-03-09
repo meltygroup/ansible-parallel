@@ -40,10 +40,10 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
             return ("FAILED", playbook, chunk)
         if "unreachable:" in lines[1]:
             return ("UNREACHABLE", playbook, chunk)
-        if "ERROR" in lines[-1]:
-            return ("ERROR", playbook, chunk)
     if chunk.startswith("TASK"):
         return ("TASK", playbook, chunk)
+    if "ERROR!" in chunk:
+        return ("ERROR", playbook, chunk)
     return ("MSG", playbook, chunk)
 
 
@@ -74,7 +74,10 @@ async def run_playbook(playbook , args, results: asyncio.Queue):
         await results.put(prepare_chunk(playbook, chunk))
 
     await process.wait()
-    await results.put(("DONE", playbook, ""))
+    if process.returncode:
+        await results.put(("DONE", playbook, f"Exited with error code: {process.returncode}"))
+    else:
+        await results.put(("DONE", playbook, "Done."))
     return process.returncode
 
 
@@ -125,7 +128,7 @@ async def show_progression(results: asyncio.Queue, playbooks: List[str], stream)
                 ends[playbook] = perf_counter()
                 stream.write("\033[0K")  # EL – Erase In Line with parameter 0.
                 stream.write("\033[m")  # Select Graphic Rendition: Attributes off.
-                stream.write("Done.")
+                stream.write(msg)
             if msgtype == "RECAP":
                 recaps[playbook] = msg
             if msgtype == "TASK":
