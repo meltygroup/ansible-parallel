@@ -1,3 +1,39 @@
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "ansible-parallel"
+# Format is YYYY.MM.DD (https://calver.org/)
+version = "2023.3.13"
+description = "Run ansible playbooks in parallel."
+authors = [
+    { name = "Julien Palard", email = "julien@palard.fr" },
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+]
+requires-python = ">= 3.7"
+
+[project.readme]
+file = "README.md"
+content-type = "text/markdown; charset=UTF-8"
+
+[project.license]
+text = "MIT License"
+
+[project.urls]
+Homepage = "https://git.afpy.org/mdk/ansible-parallel"
+
+[project.scripts]
+ansible-parallel = "ansible_parallel:main"
+
+[tool.setuptools]
+py-modules = [
+    "ansible_parallel",
+]
+include-package-data = false
