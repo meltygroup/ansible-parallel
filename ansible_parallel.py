@@ -11,6 +11,9 @@ from typing import List, Tuple
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("playbook", nargs="+")
+    parser.add_argument("-l", "--limit", type=int, 
+                        help="Stream buffer limit in KiB ", 
+                        default=asyncio.streams._DEFAULT_LIMIT)
     return parser.parse_known_args()
 
 
@@ -47,7 +50,7 @@ def prepare_chunk(playbook, chunk: str) -> Tuple[str, str, str]:
     return ("MSG", playbook, chunk)
 
 
-async def run_playbook(playbook, args, results: asyncio.Queue):
+async def run_playbook(playbook, limit, args, results: asyncio.Queue):
     await results.put(("START", playbook, ""))
     process = await asyncio.create_subprocess_exec(
         "ansible-playbook",
@@ -56,6 +59,7 @@ async def run_playbook(playbook, args, results: asyncio.Queue):
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        limit=limit,
         env={**os.environ, "ANSIBLE_FORCE_COLOR": "1"},
     )
     task = []
@@ -170,14 +174,19 @@ async def amain():
         if not os.path.isfile(playbook):
             print("Could not find playbook:", playbook)
             return 1
-
+        
+    limit = args.limit
+    if limit <= 0:
+        print("Limit must be bigger than 0:", limit)
+        return 2
+    
     results_queue = asyncio.Queue()
     printer_task = asyncio.create_task(
         show_progression(results_queue, args.playbook, sys.stderr)
     )
     results = await asyncio.gather(
         *[
-            run_playbook(playbook, remaining_args, results_queue)
+            run_playbook(playbook, limit, remaining_args, results_queue)
             for playbook in args.playbook
         ],
         return_exceptions=True,
